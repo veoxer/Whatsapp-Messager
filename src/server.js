@@ -321,28 +321,41 @@ function cleanupStaleChromeLocks() {
   }
 }
 
+function ensureDebugDir() {
+  try {
+    fs.mkdirSync(config.debugDir, { recursive: true });
+    console.log(`WhatsApp debug directory: ${config.debugDir}`);
+  } catch (error) {
+    console.warn(`Could not create WhatsApp debug directory ${config.debugDir}: ${error.message}`);
+  }
+}
+
 async function captureDebugSnapshot(reason) {
-  if (!config.debugScreenshotOnReadyTimeout || !client.pupPage) {
+  if (!config.debugScreenshotOnReadyTimeout) {
     return;
   }
 
   try {
-    fs.mkdirSync(config.debugDir, { recursive: true });
+    ensureDebugDir();
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const basePath = path.join(config.debugDir, `${stamp}-${reason}`);
-    const title = await client.pupPage.title().catch(() => null);
-    const url = client.pupPage.url ? client.pupPage.url() : null;
+    const hasPage = Boolean(client.pupPage);
+    const title = hasPage ? await client.pupPage.title().catch(() => null) : null;
+    const url = hasPage && client.pupPage.url ? client.pupPage.url() : null;
 
-    await client.pupPage.screenshot({
-      path: `${basePath}.png`,
-      fullPage: true
-    });
+    if (hasPage) {
+      await client.pupPage.screenshot({
+        path: `${basePath}.png`,
+        fullPage: true
+      });
+    }
 
     fs.writeFileSync(
       `${basePath}.json`,
       JSON.stringify(
         {
           reason,
+          hasPuppeteerPage: hasPage,
           title,
           url,
           whatsappState,
@@ -354,7 +367,11 @@ async function captureDebugSnapshot(reason) {
       )
     );
 
-    console.error(`Wrote WhatsApp debug snapshot to ${basePath}.png and ${basePath}.json`);
+    console.error(
+      hasPage
+        ? `Wrote WhatsApp debug snapshot to ${basePath}.png and ${basePath}.json`
+        : `Wrote WhatsApp debug metadata to ${basePath}.json; Puppeteer page was not available`
+    );
   } catch (error) {
     console.warn(`Could not capture WhatsApp debug snapshot: ${error.message}`);
   }
@@ -627,6 +644,7 @@ app.use((_req, res) => {
 const server = app.listen(config.port, config.host, () => {
   console.log(`Local WhatsApp API listening at http://${config.host}:${config.port}`);
   console.log("Starting WhatsApp Web client...");
+  ensureDebugDir();
   cleanupStaleChromeLocks();
   client.initialize().catch((error) => {
     whatsappReady = false;
