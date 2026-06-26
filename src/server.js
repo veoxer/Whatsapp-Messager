@@ -50,7 +50,9 @@ const config = {
   sendRateLimitMax: parseInteger(process.env.SEND_RATE_LIMIT_MAX, 20, 1, 1000),
   rateLimitWindowMs: parseInteger(process.env.RATE_LIMIT_WINDOW_MS, 60_000, 1000, 3_600_000),
   messageMaxLength: parseInteger(process.env.MESSAGE_MAX_LENGTH, 4096, 1, 65_536),
-  whatsappTimeoutMs: parseInteger(process.env.WHATSAPP_TIMEOUT_MS, 30_000, 1000, 300_000)
+  whatsappTimeoutMs: parseInteger(process.env.WHATSAPP_TIMEOUT_MS, 30_000, 1000, 300_000),
+  readyTimeoutMs: parseInteger(process.env.READY_TIMEOUT_MS, 180_000, 30_000, 900_000),
+  exitOnReadyTimeout: parseBool(process.env.EXIT_ON_READY_TIMEOUT, false)
 };
 
 config.requireApiKey = parseBool(
@@ -73,6 +75,8 @@ let whatsappReady = false;
 let whatsappState = "starting";
 let lastError = null;
 let shuttingDown = false;
+let lastStateChangeAt = new Date().toISOString();
+let readyWatchdog = null;
 
 app.disable("x-powered-by");
 app.set("trust proxy", false);
@@ -224,6 +228,37 @@ async function withTimeout(promise, label) {
   }
 }
 
+function setWhatsappState(state) {
+  whatsappState = state;
+  lastStateChangeAt = new Date().toISOString();
+}
+
+function clearReadyWatchdog() {
+  if (readyWatchdog) {
+    clearTimeout(readyWatchdog);
+    readyWatchdog = null;
+  }
+}
+
+function startReadyWatchdog(reason) {
+  clearReadyWatchdog();
+
+  readyWatchdog = setTimeout(() => {
+    if (whatsappReady || shuttingDown) {
+      return;
+    }
+
+    const message = `WhatsApp did not become ready within ${config.readyTimeoutMs}ms after ${reason}.`;
+    lastError = message;
+    console.error(message);
+
+    if (config.exitOnReadyTimeout) {
+      console.error("Exiting so Docker/Portainer can restart the container with the saved WhatsApp session.");
+      process.exit(1);
+    }
+  }, config.readyTimeoutMs);
+}
+
 function publicHealth() {
   return {
     ok: true,
@@ -240,10 +275,24 @@ function detailedStatus() {
     ...publicHealth(),
     whatsapp: {
       ...publicHealth().whatsapp,
-      hasQr: Boolean(latestQr)
+      hasQr: Boolean(latestQr),
+      lastStateChangeAt,
+      readyTimeoutMs: config.readyTimeoutMs
     },
     lastError
   };
+}
+
+function notReadyMessage() {
+  if (whatsappState === "waiting_for_qr_scan") {
+    return "WhatsApp is not ready yet. Scan the QR code and wait for ready state.";
+  }
+
+  if (whatsappState === "authenticated_waiting_for_ready" || whatsappState.startsWith("loading_")) {
+    return "WhatsApp login succeeded, but WhatsApp Web is still loading. Wait for ready state, or restart the container if it stays stuck.";
+  }
+
+  return "WhatsApp is not ready yet.";
 }
 
 function buildPuppeteerConfig() {
@@ -268,40 +317,53 @@ const client = new Client({
 });
 
 client.on("qr", async (qr) => {
+  clearReadyWatchdog();
   latestQr = qr;
   latestQrDataUrl = await QRCode.toDataURL(qr);
   whatsappReady = false;
-  whatsappState = "waiting_for_qr_scan";
+  setWhatsappState("waiting_for_qr_scan");
 
   console.log("\nScan this QR code with WhatsApp on your phone:\n");
   qrcodeTerminal.generate(qr, { small: true });
   console.log("\nYou can also open GET /qr.html in a browser while the server is running.\n");
 });
 
+client.on("loading_screen", (percent, message) => {
+  if (!whatsappReady) {
+    setWhatsappState(`loading_${percent}`);
+  }
+
+  console.log(`WhatsApp loading ${percent}%${message ? `: ${message}` : ""}`);
+});
+
 client.on("ready", () => {
+  clearReadyWatchdog();
   latestQr = null;
   latestQrDataUrl = null;
   whatsappReady = true;
-  whatsappState = "ready";
+  setWhatsappState("ready");
   lastError = null;
   console.log("WhatsApp client is ready.");
 });
 
 client.on("authenticated", () => {
-  whatsappState = "authenticated";
-  console.log("WhatsApp authentication successful.");
+  whatsappReady = false;
+  setWhatsappState("authenticated_waiting_for_ready");
+  startReadyWatchdog("authentication");
+  console.log("WhatsApp authentication successful. Waiting for WhatsApp Web to become ready...");
 });
 
 client.on("auth_failure", (message) => {
   whatsappReady = false;
-  whatsappState = "auth_failure";
+  setWhatsappState("auth_failure");
   lastError = message;
   console.error("WhatsApp authentication failed:", message);
 });
 
 client.on("disconnected", (reason) => {
+  clearReadyWatchdog();
   whatsappReady = false;
-  whatsappState = "disconnected";
+  setWhatsappState("disconnected");
   lastError = reason;
   console.warn("WhatsApp client disconnected:", reason);
 });
@@ -399,7 +461,7 @@ app.post("/messages", requireApiKey, sendLimiter, async (req, res) => {
     if (!whatsappReady) {
       return res.status(503).json({
         ok: false,
-        error: "WhatsApp is not ready yet. Scan the QR code and wait for ready state.",
+        error: notReadyMessage(),
         status: publicHealth().whatsapp
       });
     }
@@ -439,7 +501,7 @@ app.post("/logout", requireApiKey, async (_req, res) => {
   try {
     await withTimeout(client.logout(), "WhatsApp logout");
     whatsappReady = false;
-    whatsappState = "logged_out";
+    setWhatsappState("logged_out");
     latestQr = null;
     latestQrDataUrl = null;
 
@@ -493,7 +555,7 @@ const server = app.listen(config.port, config.host, () => {
   console.log("Starting WhatsApp Web client...");
   client.initialize().catch((error) => {
     whatsappReady = false;
-    whatsappState = "initialize_failed";
+    setWhatsappState("initialize_failed");
     lastError = error.message;
     console.error("Failed to initialize WhatsApp client:", error);
   });
@@ -506,7 +568,7 @@ async function shutdown(signal) {
 
   shuttingDown = true;
   whatsappReady = false;
-  whatsappState = "shutting_down";
+  setWhatsappState("shutting_down");
   console.log(`Received ${signal}; shutting down.`);
 
   server.close(async () => {

@@ -126,6 +126,38 @@ Raspberry Pi notes:
 - Keep this on your trusted LAN only. Do not port-forward `3030` from your router.
 - The Portainer stack uses `shm_size: "256mb"` because Chromium is unstable with Docker's tiny default shared memory size on small devices.
 - If the Pi is under memory pressure, close other heavy containers before first QR login.
+- After QR login, `authenticated_waiting_for_ready` means the QR was accepted but WhatsApp Web is still loading. Sending is enabled only after `/ready` returns `ready: true`.
+- On Portainer, `EXIT_ON_READY_TIMEOUT=true` restarts the container if WhatsApp Web stays stuck before `ready` for more than `READY_TIMEOUT_MS`.
+
+### Authenticated But Not Ready
+
+If logs show:
+
+```text
+WhatsApp authentication successful.
+```
+
+but `/ready` returns:
+
+```json
+{
+  "ok": true,
+  "server": "online",
+  "whatsapp": {
+    "ready": false,
+    "state": "authenticated_waiting_for_ready"
+  }
+}
+```
+
+the QR login worked, but WhatsApp Web has not finished loading inside Chromium yet. On a Raspberry Pi this can take a few minutes, especially on the first login.
+
+Try this sequence:
+
+1. Wait up to 5 minutes after scanning the QR.
+2. Check container logs for `WhatsApp client is ready.`
+3. If it stays stuck, restart the container from Portainer without deleting volumes.
+4. If it still never reaches ready after restart, remove the linked device from WhatsApp on your phone, delete the `whatsapp_auth` and `whatsapp_cache` volumes, then scan a fresh QR.
 
 ### Fix Volume Permission Errors
 
@@ -245,6 +277,8 @@ Invoke-RestMethod `
 | `RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window. |
 | `MESSAGE_MAX_LENGTH` | `4096` | Maximum text message length. |
 | `WHATSAPP_TIMEOUT_MS` | `30000` | Timeout for WhatsApp operations. |
+| `READY_TIMEOUT_MS` | `180000` locally, `300000` in Portainer | How long to wait for WhatsApp Web to become ready after authentication. |
+| `EXIT_ON_READY_TIMEOUT` | `false` locally, `true` in Portainer | Exit so Docker can restart the container if WhatsApp gets stuck before ready. |
 
 ## Operational Notes
 

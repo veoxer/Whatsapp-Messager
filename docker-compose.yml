@@ -22,6 +22,8 @@ services:
       RATE_LIMIT_WINDOW_MS: 60000
       MESSAGE_MAX_LENGTH: 4096
       WHATSAPP_TIMEOUT_MS: 30000
+      READY_TIMEOUT_MS: 180000
+      EXIT_ON_READY_TIMEOUT: "false"
     volumes:
       - whatsapp_auth:/home/node/.wwebjs_auth
       - whatsapp_cache:/home/node/.cache
