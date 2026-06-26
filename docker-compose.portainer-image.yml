@@ -1,6 +1,7 @@
 services:
   whatsapp-api:
     image: whatsapp-local-api:raspi
+    pull_policy: never
     restart: unless-stopped
     init: true
     shm_size: "256mb"

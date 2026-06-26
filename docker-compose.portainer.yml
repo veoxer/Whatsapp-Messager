@@ -1,7 +1,6 @@
 services:
   whatsapp-api:
     build: .
-    image: whatsapp-local-api:raspi
     restart: unless-stopped
     init: true
     shm_size: "256mb"

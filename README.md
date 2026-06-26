@@ -91,6 +91,8 @@ In Portainer:
 5. Add an environment variable named `API_KEY` with a random value of at least 32 characters.
 6. Deploy the stack.
 
+If Portainer shows a `pull access denied for whatsapp-local-api` error, it is using an older stack file that still had a local image name in the Git-build compose file. Pull the latest repo changes, then redeploy using `docker-compose.portainer.yml`. That file should contain `build: .` and should not contain `image: whatsapp-local-api:raspi`.
+
 Generate a key on the Pi:
 
 ```bash
@@ -118,6 +120,8 @@ docker build -t whatsapp-local-api:raspi .
 ```
 
 Then paste [docker-compose.portainer-image.yml](<docker-compose.portainer-image.yml>) into Portainer's stack editor. That stack uses the local image tag and does not need a build context.
+
+For the image-only stack, keep `pull_policy: never` in the compose file. That tells Compose to use the image you built on the Pi instead of trying to pull `whatsapp-local-api:raspi` from Docker Hub.
 
 Raspberry Pi notes:
 
