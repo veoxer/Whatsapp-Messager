@@ -163,6 +163,24 @@ Try this sequence:
 3. If it stays stuck, restart the container from Portainer without deleting volumes.
 4. If it still never reaches ready after restart, remove the linked device from WhatsApp on your phone, delete the `whatsapp_auth` and `whatsapp_cache` volumes, then scan a fresh QR.
 
+### Fix Chromium Profile Lock Errors
+
+If logs show:
+
+```text
+The profile appears to be in use by another Chromium process
+```
+
+then Chromium left stale lock files in the persisted WhatsApp profile. This can happen after a forced redeploy or restart.
+
+The app removes Chromium `SingletonLock`, `SingletonSocket`, and `SingletonCookie` files on startup by default. Make sure your stack has:
+
+```yaml
+CLEAN_CHROME_LOCKS_ON_START: "true"
+```
+
+Then redeploy the stack. Also make sure only one container is using the `whatsapp_auth` volume. If two containers use the same WhatsApp auth volume at the same time, the profile can lock again.
+
 ### Fix Volume Permission Errors
 
 If logs show an error like this:
@@ -283,6 +301,7 @@ Invoke-RestMethod `
 | `WHATSAPP_TIMEOUT_MS` | `30000` | Timeout for WhatsApp operations. |
 | `READY_TIMEOUT_MS` | `180000` locally, `300000` in Portainer | How long to wait for WhatsApp Web to become ready after authentication. |
 | `EXIT_ON_READY_TIMEOUT` | `false` locally, `true` in Portainer | Exit so Docker can restart the container if WhatsApp gets stuck before ready. |
+| `CLEAN_CHROME_LOCKS_ON_START` | `true` | Removes stale Chromium profile lock files before launching WhatsApp Web. |
 
 ## Operational Notes
 

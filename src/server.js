@@ -1,6 +1,8 @@
 require("dotenv").config();
 
 const crypto = require("crypto");
+const fs = require("fs");
+const path = require("path");
 const express = require("express");
 const rateLimit = require("express-rate-limit");
 const helmet = require("helmet");
@@ -52,7 +54,8 @@ const config = {
   messageMaxLength: parseInteger(process.env.MESSAGE_MAX_LENGTH, 4096, 1, 65_536),
   whatsappTimeoutMs: parseInteger(process.env.WHATSAPP_TIMEOUT_MS, 30_000, 1000, 300_000),
   readyTimeoutMs: parseInteger(process.env.READY_TIMEOUT_MS, 180_000, 30_000, 900_000),
-  exitOnReadyTimeout: parseBool(process.env.EXIT_ON_READY_TIMEOUT, false)
+  exitOnReadyTimeout: parseBool(process.env.EXIT_ON_READY_TIMEOUT, false),
+  cleanChromeLocksOnStart: parseBool(process.env.CLEAN_CHROME_LOCKS_ON_START, true)
 };
 
 config.requireApiKey = parseBool(
@@ -293,6 +296,26 @@ function notReadyMessage() {
   }
 
   return "WhatsApp is not ready yet.";
+}
+
+function cleanupStaleChromeLocks() {
+  if (!config.cleanChromeLocksOnStart) {
+    return;
+  }
+
+  const profileDir = path.resolve(config.authDataPath, "session");
+  const lockNames = ["SingletonLock", "SingletonSocket", "SingletonCookie"];
+
+  for (const lockName of lockNames) {
+    const lockPath = path.join(profileDir, lockName);
+
+    try {
+      fs.rmSync(lockPath, { force: true });
+      console.log(`Removed stale Chromium profile lock: ${lockPath}`);
+    } catch (error) {
+      console.warn(`Could not remove Chromium profile lock ${lockPath}: ${error.message}`);
+    }
+  }
 }
 
 function buildPuppeteerConfig() {
@@ -553,6 +576,7 @@ app.use((_req, res) => {
 const server = app.listen(config.port, config.host, () => {
   console.log(`Local WhatsApp API listening at http://${config.host}:${config.port}`);
   console.log("Starting WhatsApp Web client...");
+  cleanupStaleChromeLocks();
   client.initialize().catch((error) => {
     whatsappReady = false;
     setWhatsappState("initialize_failed");

@@ -24,6 +24,7 @@ services:
       WHATSAPP_TIMEOUT_MS: 30000
       READY_TIMEOUT_MS: 180000
       EXIT_ON_READY_TIMEOUT: "false"
+      CLEAN_CHROME_LOCKS_ON_START: "true"
     volumes:
       - whatsapp_auth:/home/node/.wwebjs_auth
       - whatsapp_cache:/home/node/.cache
