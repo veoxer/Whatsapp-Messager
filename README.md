@@ -156,6 +156,8 @@ but `/ready` returns:
 
 the QR login worked, but WhatsApp Web has not finished loading inside Chromium yet. On a Raspberry Pi this can take a few minutes, especially on the first login.
 
+WhatsApp sometimes shows modal dialogs such as `What's new on WhatsApp Web` after login. In headless Docker there is nobody to click the X, so the service automatically presses Escape and clicks common close/dismiss buttons while waiting for ready.
+
 Try this sequence:
 
 1. Wait up to 5 minutes after scanning the QR.
@@ -313,6 +315,8 @@ Invoke-RestMethod `
 | `CLEAN_CHROME_LOCKS_ON_START` | `true` | Removes stale Chromium profile lock files before launching WhatsApp Web. |
 | `DEBUG_DIR` | `/home/node/.cache/whatsapp-api-debug` | Directory for timeout screenshots and metadata. |
 | `DEBUG_SCREENSHOT_ON_READY_TIMEOUT` | `true` | Captures a screenshot when WhatsApp Web never reaches ready. |
+| `AUTO_DISMISS_POPUPS` | `true` | Attempts to close WhatsApp Web modal dialogs while waiting for ready. |
+| `POPUP_DISMISS_INTERVAL_MS` | `15000` | How often to retry popup dismissal before ready. |
 
 ## Operational Notes
 

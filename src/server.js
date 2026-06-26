@@ -57,7 +57,9 @@ const config = {
   exitOnReadyTimeout: parseBool(process.env.EXIT_ON_READY_TIMEOUT, false),
   cleanChromeLocksOnStart: parseBool(process.env.CLEAN_CHROME_LOCKS_ON_START, true),
   debugDir: process.env.DEBUG_DIR || "/home/node/.cache/whatsapp-api-debug",
-  debugScreenshotOnReadyTimeout: parseBool(process.env.DEBUG_SCREENSHOT_ON_READY_TIMEOUT, true)
+  debugScreenshotOnReadyTimeout: parseBool(process.env.DEBUG_SCREENSHOT_ON_READY_TIMEOUT, true),
+  autoDismissPopups: parseBool(process.env.AUTO_DISMISS_POPUPS, true),
+  popupDismissIntervalMs: parseInteger(process.env.POPUP_DISMISS_INTERVAL_MS, 15_000, 1000, 120_000)
 };
 
 config.requireApiKey = parseBool(
@@ -82,6 +84,7 @@ let lastError = null;
 let shuttingDown = false;
 let lastStateChangeAt = new Date().toISOString();
 let readyWatchdog = null;
+let popupDismissInterval = null;
 
 app.disable("x-powered-by");
 app.set("trust proxy", false);
@@ -245,6 +248,13 @@ function clearReadyWatchdog() {
   }
 }
 
+function clearPopupDismissLoop() {
+  if (popupDismissInterval) {
+    clearInterval(popupDismissInterval);
+    popupDismissInterval = null;
+  }
+}
+
 function startReadyWatchdog(reason) {
   clearReadyWatchdog();
 
@@ -263,6 +273,18 @@ function startReadyWatchdog(reason) {
       process.exit(1);
     }
   }, config.readyTimeoutMs);
+}
+
+function startPopupDismissLoop() {
+  if (!config.autoDismissPopups || popupDismissInterval) {
+    return;
+  }
+
+  popupDismissInterval = setInterval(() => {
+    dismissWhatsAppPopups("interval").catch((error) => {
+      console.warn(`Could not dismiss WhatsApp popup: ${error.message}`);
+    });
+  }, config.popupDismissIntervalMs);
 }
 
 function publicHealth() {
@@ -377,6 +399,99 @@ async function captureDebugSnapshot(reason) {
   }
 }
 
+async function dismissWhatsAppPopups(reason) {
+  if (!config.autoDismissPopups || whatsappReady || !client.pupPage) {
+    return;
+  }
+
+  await client.pupPage.keyboard.press("Escape").catch(() => {});
+
+  const result = await client.pupPage.evaluate(() => {
+    const normalize = (value) => (value || "").replace(/\s+/g, " ").trim().toLowerCase();
+    const clicked = [];
+    const closeLabels = new Set([
+      "close",
+      "dismiss",
+      "not now",
+      "ok",
+      "got it",
+      "continue"
+    ]);
+    const closeDataIcons = new Set([
+      "x",
+      "x-alt",
+      "close",
+      "delete",
+      "dismiss"
+    ]);
+
+    const clickIfVisible = (element, label) => {
+      if (!element || typeof element.click !== "function") {
+        return false;
+      }
+
+      const rect = element.getBoundingClientRect();
+      const style = window.getComputedStyle(element);
+      const visible = rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+
+      if (!visible) {
+        return false;
+      }
+
+      element.click();
+      clicked.push(label);
+      return true;
+    };
+
+    const candidates = Array.from(
+      document.querySelectorAll("button, [role='button'], [aria-label], [title], span[data-icon]")
+    );
+
+    for (const element of candidates) {
+      const label = normalize(element.getAttribute("aria-label"));
+      const title = normalize(element.getAttribute("title"));
+      const text = normalize(element.textContent);
+      const dataIcon = normalize(element.getAttribute("data-icon"));
+
+      if (
+        closeLabels.has(label) ||
+        closeLabels.has(title) ||
+        closeLabels.has(text) ||
+        closeDataIcons.has(dataIcon)
+      ) {
+        clickIfVisible(element, label || title || text || dataIcon || element.tagName);
+      }
+    }
+
+    const whatsNewHeading = Array.from(document.querySelectorAll("h1, h2, h3, div, span")).find((element) =>
+      normalize(element.textContent).includes("what's new on whatsapp web")
+    );
+
+    if (whatsNewHeading) {
+      const dialog = whatsNewHeading.closest("[role='dialog']") || whatsNewHeading.closest("div");
+      const dialogButtons = dialog
+        ? Array.from(dialog.querySelectorAll("button, [role='button'], [aria-label], span[data-icon]"))
+        : [];
+
+      for (const element of dialogButtons) {
+        const label = normalize(element.getAttribute("aria-label"));
+        const title = normalize(element.getAttribute("title"));
+        const dataIcon = normalize(element.getAttribute("data-icon"));
+
+        if (closeLabels.has(label) || closeLabels.has(title) || closeDataIcons.has(dataIcon)) {
+          clickIfVisible(element, `whats-new:${label || title || dataIcon || element.tagName}`);
+        }
+      }
+    }
+
+    return clicked;
+  });
+
+  if (result.length > 0) {
+    console.log(`Dismissed WhatsApp popup during ${reason}: ${result.join(", ")}`);
+  }
+}
+
 function buildPuppeteerConfig() {
   const args = [
     "--disable-dev-shm-usage",
@@ -409,6 +524,7 @@ const client = new Client({
 
 client.on("qr", async (qr) => {
   clearReadyWatchdog();
+  clearPopupDismissLoop();
   latestQr = qr;
   latestQrDataUrl = await QRCode.toDataURL(qr);
   whatsappReady = false;
@@ -425,10 +541,17 @@ client.on("loading_screen", (percent, message) => {
   }
 
   console.log(`WhatsApp loading ${percent}%${message ? `: ${message}` : ""}`);
+
+  if (Number(percent) >= 90) {
+    dismissWhatsAppPopups("loading").catch((error) => {
+      console.warn(`Could not dismiss WhatsApp popup during loading: ${error.message}`);
+    });
+  }
 });
 
 client.on("ready", () => {
   clearReadyWatchdog();
+  clearPopupDismissLoop();
   latestQr = null;
   latestQrDataUrl = null;
   whatsappReady = true;
@@ -441,6 +564,12 @@ client.on("authenticated", () => {
   whatsappReady = false;
   setWhatsappState("authenticated_waiting_for_ready");
   startReadyWatchdog("authentication");
+  startPopupDismissLoop();
+  setTimeout(() => {
+    dismissWhatsAppPopups("authentication").catch((error) => {
+      console.warn(`Could not dismiss WhatsApp popup after authentication: ${error.message}`);
+    });
+  }, 3000);
   console.log("WhatsApp authentication successful. Waiting for WhatsApp Web to become ready...");
 });
 
@@ -453,6 +582,7 @@ client.on("auth_failure", (message) => {
 
 client.on("disconnected", (reason) => {
   clearReadyWatchdog();
+  clearPopupDismissLoop();
   whatsappReady = false;
   setWhatsappState("disconnected");
   lastError = reason;
@@ -660,6 +790,7 @@ async function shutdown(signal) {
   }
 
   shuttingDown = true;
+  clearPopupDismissLoop();
   whatsappReady = false;
   setWhatsappState("shutting_down");
   console.log(`Received ${signal}; shutting down.`);
