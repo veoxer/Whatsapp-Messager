@@ -28,6 +28,8 @@ services:
       DEBUG_SCREENSHOT_ON_READY_TIMEOUT: "true"
       AUTO_DISMISS_POPUPS: "true"
       POPUP_DISMISS_INTERVAL_MS: 15000
+      ENABLE_READY_FALLBACK: "true"
+      READY_FALLBACK_INTERVAL_MS: 10000
     volumes:
       - whatsapp_auth:/home/node/.wwebjs_auth
       - whatsapp_cache:/home/node/.cache

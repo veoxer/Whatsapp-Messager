@@ -9,6 +9,7 @@ const helmet = require("helmet");
 const QRCode = require("qrcode");
 const qrcodeTerminal = require("qrcode-terminal");
 const { Client, LocalAuth } = require("whatsapp-web.js");
+const { LoadUtils } = require("whatsapp-web.js/src/util/Injected/Utils");
 
 const app = express();
 
@@ -59,7 +60,9 @@ const config = {
   debugDir: process.env.DEBUG_DIR || "/home/node/.cache/whatsapp-api-debug",
   debugScreenshotOnReadyTimeout: parseBool(process.env.DEBUG_SCREENSHOT_ON_READY_TIMEOUT, true),
   autoDismissPopups: parseBool(process.env.AUTO_DISMISS_POPUPS, true),
-  popupDismissIntervalMs: parseInteger(process.env.POPUP_DISMISS_INTERVAL_MS, 15_000, 1000, 120_000)
+  popupDismissIntervalMs: parseInteger(process.env.POPUP_DISMISS_INTERVAL_MS, 15_000, 1000, 120_000),
+  enableReadyFallback: parseBool(process.env.ENABLE_READY_FALLBACK, true),
+  readyFallbackIntervalMs: parseInteger(process.env.READY_FALLBACK_INTERVAL_MS, 10_000, 1000, 120_000)
 };
 
 config.requireApiKey = parseBool(
@@ -85,6 +88,7 @@ let shuttingDown = false;
 let lastStateChangeAt = new Date().toISOString();
 let readyWatchdog = null;
 let popupDismissInterval = null;
+let readyFallbackInterval = null;
 
 app.disable("x-powered-by");
 app.set("trust proxy", false);
@@ -255,6 +259,13 @@ function clearPopupDismissLoop() {
   }
 }
 
+function clearReadyFallbackLoop() {
+  if (readyFallbackInterval) {
+    clearInterval(readyFallbackInterval);
+    readyFallbackInterval = null;
+  }
+}
+
 function startReadyWatchdog(reason) {
   clearReadyWatchdog();
 
@@ -285,6 +296,18 @@ function startPopupDismissLoop() {
       console.warn(`Could not dismiss WhatsApp popup: ${error.message}`);
     });
   }, config.popupDismissIntervalMs);
+}
+
+function startReadyFallbackLoop() {
+  if (!config.enableReadyFallback || readyFallbackInterval) {
+    return;
+  }
+
+  readyFallbackInterval = setInterval(() => {
+    detectReadyFallback("interval").catch((error) => {
+      console.warn(`Could not run WhatsApp ready fallback check: ${error.message}`);
+    });
+  }, config.readyFallbackIntervalMs);
 }
 
 function publicHealth() {
@@ -492,6 +515,68 @@ async function dismissWhatsAppPopups(reason) {
   }
 }
 
+async function detectReadyFallback(reason) {
+  if (!config.enableReadyFallback || whatsappReady || !client.pupPage) {
+    return false;
+  }
+
+  const snapshot = await client.pupPage.evaluate(() => {
+    const text = document.body ? document.body.innerText || "" : "";
+    const socket = window.require ? window.require("WAWebSocketModel").Socket : null;
+    const socketState = socket ? socket.state : null;
+    const hasSynced = socket ? Boolean(socket.hasSynced) : false;
+    const hasWWebJS = typeof window.WWebJS !== "undefined";
+    const hasSendHelpers =
+      hasWWebJS &&
+      typeof window.WWebJS.sendMessage === "function" &&
+      typeof window.WWebJS.getChat === "function";
+    const hasChatUi =
+      text.includes("Search or start a new chat") ||
+      text.includes("Archived") ||
+      Boolean(document.querySelector("[aria-label='Search or start a new chat']"));
+
+    return {
+      socketState,
+      hasSynced,
+      hasWWebJS,
+      hasSendHelpers,
+      hasChatUi
+    };
+  });
+
+  if (snapshot.socketState !== "CONNECTED" && !snapshot.hasSynced) {
+    return false;
+  }
+
+  if (!snapshot.hasSendHelpers && snapshot.hasChatUi) {
+    await client.pupPage.evaluate(LoadUtils);
+  }
+
+  const ready = await client.pupPage.evaluate(() => {
+    return Boolean(
+      window.WWebJS &&
+        typeof window.WWebJS.sendMessage === "function" &&
+        typeof window.WWebJS.getChat === "function" &&
+        window.require("WAWebSocketModel").Socket.state === "CONNECTED"
+    );
+  });
+
+  if (!ready) {
+    return false;
+  }
+
+  clearReadyWatchdog();
+  clearPopupDismissLoop();
+  clearReadyFallbackLoop();
+  latestQr = null;
+  latestQrDataUrl = null;
+  whatsappReady = true;
+  setWhatsappState("ready");
+  lastError = null;
+  console.log(`WhatsApp client marked ready by fallback during ${reason}.`);
+  return true;
+}
+
 function buildPuppeteerConfig() {
   const args = [
     "--disable-dev-shm-usage",
@@ -525,6 +610,7 @@ const client = new Client({
 client.on("qr", async (qr) => {
   clearReadyWatchdog();
   clearPopupDismissLoop();
+  clearReadyFallbackLoop();
   latestQr = qr;
   latestQrDataUrl = await QRCode.toDataURL(qr);
   whatsappReady = false;
@@ -543,8 +629,12 @@ client.on("loading_screen", (percent, message) => {
   console.log(`WhatsApp loading ${percent}%${message ? `: ${message}` : ""}`);
 
   if (Number(percent) >= 90) {
+    startReadyFallbackLoop();
     dismissWhatsAppPopups("loading").catch((error) => {
       console.warn(`Could not dismiss WhatsApp popup during loading: ${error.message}`);
+    });
+    detectReadyFallback("loading").catch((error) => {
+      console.warn(`Could not run WhatsApp ready fallback during loading: ${error.message}`);
     });
   }
 });
@@ -552,6 +642,7 @@ client.on("loading_screen", (percent, message) => {
 client.on("ready", () => {
   clearReadyWatchdog();
   clearPopupDismissLoop();
+  clearReadyFallbackLoop();
   latestQr = null;
   latestQrDataUrl = null;
   whatsappReady = true;
@@ -565,6 +656,7 @@ client.on("authenticated", () => {
   setWhatsappState("authenticated_waiting_for_ready");
   startReadyWatchdog("authentication");
   startPopupDismissLoop();
+  startReadyFallbackLoop();
   setTimeout(() => {
     dismissWhatsAppPopups("authentication").catch((error) => {
       console.warn(`Could not dismiss WhatsApp popup after authentication: ${error.message}`);
@@ -583,6 +675,7 @@ client.on("auth_failure", (message) => {
 client.on("disconnected", (reason) => {
   clearReadyWatchdog();
   clearPopupDismissLoop();
+  clearReadyFallbackLoop();
   whatsappReady = false;
   setWhatsappState("disconnected");
   lastError = reason;
@@ -791,6 +884,7 @@ async function shutdown(signal) {
 
   shuttingDown = true;
   clearPopupDismissLoop();
+  clearReadyFallbackLoop();
   whatsappReady = false;
   setWhatsappState("shutting_down");
   console.log(`Received ${signal}; shutting down.`);

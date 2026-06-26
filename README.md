@@ -158,6 +158,8 @@ the QR login worked, but WhatsApp Web has not finished loading inside Chromium y
 
 WhatsApp sometimes shows modal dialogs such as `What's new on WhatsApp Web` after login. In headless Docker there is nobody to click the X, so the service automatically presses Escape and clicks common close/dismiss buttons while waiting for ready.
 
+If the WhatsApp UI is visibly loaded but the upstream library never emits its `ready` event, the service also runs a fallback readiness check. It only marks the API ready when WhatsApp Web reports a connected socket and the library's send helpers are available.
+
 Try this sequence:
 
 1. Wait up to 5 minutes after scanning the QR.
@@ -317,6 +319,8 @@ Invoke-RestMethod `
 | `DEBUG_SCREENSHOT_ON_READY_TIMEOUT` | `true` | Captures a screenshot when WhatsApp Web never reaches ready. |
 | `AUTO_DISMISS_POPUPS` | `true` | Attempts to close WhatsApp Web modal dialogs while waiting for ready. |
 | `POPUP_DISMISS_INTERVAL_MS` | `15000` | How often to retry popup dismissal before ready. |
+| `ENABLE_READY_FALLBACK` | `true` | Marks the API ready if WhatsApp Web is connected and send helpers are available, even if the upstream ready event is missed. |
+| `READY_FALLBACK_INTERVAL_MS` | `10000` | How often to check fallback readiness before ready. |
 
 ## Operational Notes
 
