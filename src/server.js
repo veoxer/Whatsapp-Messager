@@ -55,7 +55,9 @@ const config = {
   whatsappTimeoutMs: parseInteger(process.env.WHATSAPP_TIMEOUT_MS, 30_000, 1000, 300_000),
   readyTimeoutMs: parseInteger(process.env.READY_TIMEOUT_MS, 180_000, 30_000, 900_000),
   exitOnReadyTimeout: parseBool(process.env.EXIT_ON_READY_TIMEOUT, false),
-  cleanChromeLocksOnStart: parseBool(process.env.CLEAN_CHROME_LOCKS_ON_START, true)
+  cleanChromeLocksOnStart: parseBool(process.env.CLEAN_CHROME_LOCKS_ON_START, true),
+  debugDir: process.env.DEBUG_DIR || "/home/node/.cache/whatsapp-api-debug",
+  debugScreenshotOnReadyTimeout: parseBool(process.env.DEBUG_SCREENSHOT_ON_READY_TIMEOUT, true)
 };
 
 config.requireApiKey = parseBool(
@@ -246,7 +248,7 @@ function clearReadyWatchdog() {
 function startReadyWatchdog(reason) {
   clearReadyWatchdog();
 
-  readyWatchdog = setTimeout(() => {
+  readyWatchdog = setTimeout(async () => {
     if (whatsappReady || shuttingDown) {
       return;
     }
@@ -254,6 +256,7 @@ function startReadyWatchdog(reason) {
     const message = `WhatsApp did not become ready within ${config.readyTimeoutMs}ms after ${reason}.`;
     lastError = message;
     console.error(message);
+    await captureDebugSnapshot("ready-timeout");
 
     if (config.exitOnReadyTimeout) {
       console.error("Exiting so Docker/Portainer can restart the container with the saved WhatsApp session.");
@@ -318,8 +321,56 @@ function cleanupStaleChromeLocks() {
   }
 }
 
+async function captureDebugSnapshot(reason) {
+  if (!config.debugScreenshotOnReadyTimeout || !client.pupPage) {
+    return;
+  }
+
+  try {
+    fs.mkdirSync(config.debugDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const basePath = path.join(config.debugDir, `${stamp}-${reason}`);
+    const title = await client.pupPage.title().catch(() => null);
+    const url = client.pupPage.url ? client.pupPage.url() : null;
+
+    await client.pupPage.screenshot({
+      path: `${basePath}.png`,
+      fullPage: true
+    });
+
+    fs.writeFileSync(
+      `${basePath}.json`,
+      JSON.stringify(
+        {
+          reason,
+          title,
+          url,
+          whatsappState,
+          lastStateChangeAt,
+          capturedAt: new Date().toISOString()
+        },
+        null,
+        2
+      )
+    );
+
+    console.error(`Wrote WhatsApp debug snapshot to ${basePath}.png and ${basePath}.json`);
+  } catch (error) {
+    console.warn(`Could not capture WhatsApp debug snapshot: ${error.message}`);
+  }
+}
+
 function buildPuppeteerConfig() {
-  const args = ["--disable-dev-shm-usage"];
+  const args = [
+    "--disable-dev-shm-usage",
+    "--disable-extensions",
+    "--disable-gpu",
+    "--disable-infobars",
+    "--disable-notifications",
+    "--disable-software-rasterizer",
+    "--no-first-run",
+    "--no-default-browser-check"
+  ];
 
   if (config.chromeNoSandbox) {
     args.push("--no-sandbox", "--disable-setuid-sandbox");

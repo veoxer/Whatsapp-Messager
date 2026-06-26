@@ -161,7 +161,16 @@ Try this sequence:
 1. Wait up to 5 minutes after scanning the QR.
 2. Check container logs for `WhatsApp client is ready.`
 3. If it stays stuck, restart the container from Portainer without deleting volumes.
-4. If it still never reaches ready after restart, remove the linked device from WhatsApp on your phone, delete the `whatsapp_auth` and `whatsapp_cache` volumes, then scan a fresh QR.
+4. If it still never reaches ready after restart, check the debug snapshot written under `/home/node/.cache/whatsapp-api-debug` inside the container.
+5. If the page is visibly stuck or asking for action, remove the linked device from WhatsApp on your phone, delete the `whatsapp_auth` and `whatsapp_cache` volumes, then scan a fresh QR.
+
+When readiness times out, the app writes a PNG screenshot and JSON metadata file before exiting. In Portainer, open the container console and run:
+
+```bash
+ls -la /home/node/.cache/whatsapp-api-debug
+```
+
+The screenshot may contain WhatsApp UI or contact data. Do not commit or upload it publicly.
 
 ### Fix Chromium Profile Lock Errors
 
@@ -302,6 +311,8 @@ Invoke-RestMethod `
 | `READY_TIMEOUT_MS` | `180000` locally, `300000` in Portainer | How long to wait for WhatsApp Web to become ready after authentication. |
 | `EXIT_ON_READY_TIMEOUT` | `false` locally, `true` in Portainer | Exit so Docker can restart the container if WhatsApp gets stuck before ready. |
 | `CLEAN_CHROME_LOCKS_ON_START` | `true` | Removes stale Chromium profile lock files before launching WhatsApp Web. |
+| `DEBUG_DIR` | `/home/node/.cache/whatsapp-api-debug` | Directory for timeout screenshots and metadata. |
+| `DEBUG_SCREENSHOT_ON_READY_TIMEOUT` | `true` | Captures a screenshot when WhatsApp Web never reaches ready. |
 
 ## Operational Notes
 

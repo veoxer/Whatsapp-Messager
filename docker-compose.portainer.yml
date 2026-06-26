@@ -24,6 +24,8 @@ services:
       READY_TIMEOUT_MS: 300000
       EXIT_ON_READY_TIMEOUT: "true"
       CLEAN_CHROME_LOCKS_ON_START: "true"
+      DEBUG_DIR: /home/node/.cache/whatsapp-api-debug
+      DEBUG_SCREENSHOT_ON_READY_TIMEOUT: "true"
     volumes:
       - whatsapp_auth:/home/node/.wwebjs_auth
       - whatsapp_cache:/home/node/.cache
