@@ -127,6 +127,31 @@ Raspberry Pi notes:
 - The Portainer stack uses `shm_size: "256mb"` because Chromium is unstable with Docker's tiny default shared memory size on small devices.
 - If the Pi is under memory pressure, close other heavy containers before first QR login.
 
+### Fix Volume Permission Errors
+
+If logs show an error like this:
+
+```text
+EACCES: permission denied, mkdir '/home/node/.wwebjs_auth/session'
+```
+
+the Docker volume was created with the wrong owner before the image prepared the auth directory. Since this usually happens before WhatsApp is logged in, the simplest fix is to recreate the stack volumes:
+
+1. In Portainer, stop the stack.
+2. Remove the stack.
+3. Go to `Volumes`.
+4. Delete the stack volumes ending in `whatsapp_auth` and `whatsapp_cache`.
+5. Redeploy the stack.
+
+If you already completed QR login and need to preserve the volume, SSH into the Pi and run:
+
+```bash
+docker run --rm -u root -v YOUR_STACK_NAME_whatsapp_auth:/target alpine chown -R 1000:1000 /target
+docker run --rm -u root -v YOUR_STACK_NAME_whatsapp_cache:/target alpine chown -R 1000:1000 /target
+```
+
+Replace `YOUR_STACK_NAME` with the actual Portainer stack prefix shown in the Volumes page.
+
 ## Run Without Docker
 
 ```powershell

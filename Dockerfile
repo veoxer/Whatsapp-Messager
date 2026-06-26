@@ -15,7 +15,9 @@ RUN apt-get update \
       chromium \
       dumb-init \
       fonts-liberation \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /home/node/.wwebjs_auth /home/node/.cache \
+    && chown -R node:node /home/node
 
 WORKDIR /app
 
