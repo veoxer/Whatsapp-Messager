@@ -1,0 +1,35 @@
+services:
+  whatsapp-api:
+    build: .
+    image: whatsapp-local-api:raspi
+    restart: unless-stopped
+    init: true
+    shm_size: "256mb"
+    ports:
+      - "3030:3030"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3030
+      API_KEY: ${API_KEY:?Set API_KEY in Portainer stack environment variables to a random value of at least 32 characters}
+      REQUIRE_API_KEY: "true"
+      AUTH_DATA_PATH: /home/node/.wwebjs_auth
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+      PUPPETEER_HEADLESS: "true"
+      CHROME_NO_SANDBOX: "true"
+      GENERAL_RATE_LIMIT_MAX: 120
+      SEND_RATE_LIMIT_MAX: 20
+      RATE_LIMIT_WINDOW_MS: 60000
+      MESSAGE_MAX_LENGTH: 4096
+      WHATSAPP_TIMEOUT_MS: 45000
+    volumes:
+      - whatsapp_auth:/home/node/.wwebjs_auth
+      - whatsapp_cache:/home/node/.cache
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  whatsapp_auth:
+  whatsapp_cache:
