@@ -521,7 +521,6 @@ async function detectReadyFallback(reason) {
   }
 
   const snapshot = await client.pupPage.evaluate(() => {
-    const text = document.body ? document.body.innerText || "" : "";
     const socket = window.require ? window.require("WAWebSocketModel").Socket : null;
     const socketState = socket ? socket.state : null;
     const hasSynced = socket ? Boolean(socket.hasSynced) : false;
@@ -530,17 +529,12 @@ async function detectReadyFallback(reason) {
       hasWWebJS &&
       typeof window.WWebJS.sendMessage === "function" &&
       typeof window.WWebJS.getChat === "function";
-    const hasChatUi =
-      text.includes("Search or start a new chat") ||
-      text.includes("Archived") ||
-      Boolean(document.querySelector("[aria-label='Search or start a new chat']"));
 
     return {
       socketState,
       hasSynced,
       hasWWebJS,
-      hasSendHelpers,
-      hasChatUi
+      hasSendHelpers
     };
   });
 
@@ -548,7 +542,10 @@ async function detectReadyFallback(reason) {
     return false;
   }
 
-  if (!snapshot.hasSendHelpers && snapshot.hasChatUi) {
+  if (!snapshot.hasSendHelpers) {
+    console.log(
+      `WhatsApp fallback detected socket=${snapshot.socketState}, synced=${snapshot.hasSynced}; injecting send helpers.`
+    );
     await client.pupPage.evaluate(LoadUtils);
   }
 
